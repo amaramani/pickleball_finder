@@ -1,0 +1,7 @@
+python-dotenv
+requests
+selenium
+webdriver_manager
+geopy
+fake-useragent
+beautifulsoup4

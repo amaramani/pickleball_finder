@@ -1,249 +1,248 @@
 from scraper.pickleheads_scraper import PickleheadsScraper
 from models.scraped_court_data import ScrapedCourtData
+from core.database import SupabaseDB
+from utils.config import load_config
+from utils.scraping_helpers import extract_chakra_links, process_court_link, analyze_court_data, update_court_statistics
+from utils.performance_helpers import safe_extract, validate_url, PerformanceTracker, logger
 import time
-from bs4 import BeautifulSoup
-import requests
-import base64
+from typing import Dict, Any
 
 
-def extract_chakra_links(html_content):
-    """Extract href values from anchor tags with class 'chakra-link css-13arwou' inside div with class 'chakra-stack css-1iym7wy'."""
-    soup = BeautifulSoup(html_content, "html.parser")
-    target_div = soup.find("div", class_="chakra-stack css-1iym7wy")
-    if target_div:
-        anchor_tags = target_div.find_all("a", class_="chakra-link css-13arwou")
-        base_url = "https://www.pickleheads.com"
-        href_links = []
-        for tag in anchor_tags:
-            href = tag.get("href")
-            if href:
-                full_url = base_url + href if href.startswith("/") else href
-                href_links.append(full_url)
-        print(f"Target div found. Found {len(href_links)} href links.")
-        return href_links
-    else:
-        print("Target <div> with class 'chakra-stack css-1iym7wy' not found.")
-        return []
-
-
-def extract_h1_heading(html_content):
-    """Extract h1 tag value with class 'chakra-heading css-1ub50s6' under div with class 'css-199v8ro'."""
-    soup = BeautifulSoup(html_content, "html.parser")
-    parent_div = soup.find("div", class_="css-199v8ro")
-    if parent_div:
-        h1_tag = parent_div.find("h1", class_="chakra-heading css-1ub50s6")
-        if h1_tag:
-            return h1_tag.get_text(strip=True)
-        else:
-            print("H1 tag with class 'chakra-heading css-1ub50s6' not found.")
-    else:
-        print("Parent <div> with class 'css-199v8ro' not found.")
-    return None
-
-
-def extract_anchor_links(html_content):
-    """Extract anchor tags with class 'chakra-link css-1kon4c3' from three div containers with class 'chakra-stack css-1gwmid'."""
-    soup = BeautifulSoup(html_content, "html.parser")
-    parent_div = soup.find("div", class_="css-199v8ro")
-
-    if parent_div:
-        stack_divs = parent_div.find_all("div", class_="chakra-stack css-1igwmid")
-        if stack_divs:
-            anchor_data = []
-            for i, div in enumerate(stack_divs[:3]):  # Limit to first 3 divs
-                anchor = div.find("a", class_="chakra-link css-1kon4c3")
-                if anchor:
-                    href_value = anchor.get("href", "")
-                    text_value = anchor.get_text(strip=True)
-
-                    # Add base URL if href is relative
-                    if href_value and href_value.startswith("/"):
-                        href_value = "https://www.pickleheads.com" + href_value
-
-                    anchor_data.append({"href": href_value, "text": text_value})
-            return anchor_data
-    return []
-
-
-def extract_and_download_image(html_content):
-    """Extract img tag with class 'chakra-image css-8938v5' under button with class 'css-13wp03w' and download image."""
-    soup = BeautifulSoup(html_content, "html.parser")
-    button = soup.find("button", class_="css-13wp03w")
-
-    if button:
-        img_tag = button.find("img", class_="chakra-image css-8938v5")
-        if img_tag:
-            img_src = img_tag.get("src")
-            if img_src:
-                # Handle relative URLs
-                if img_src.startswith("/"):
-                    img_src = "https://www.pickleheads.com" + img_src
-
-                try:
-                    # Download image
-                    response = requests.get(img_src, timeout=10)
-                    if response.status_code == 200:
-                        # Convert to base64 for database storage
-                        image_base64 = base64.b64encode(response.content).decode(
-                            "utf-8"
-                        )
-                        return {
-                            "src": img_src,
-                            "image_data": image_base64,
-                            "content_type": response.headers.get(
-                                "content-type", "image/jpeg"
-                            ),
-                        }
-                    else:
-                        print(f"Failed to download image: HTTP {response.status_code}")
-                except Exception as e:
-                    print(f"Error downloading image: {e}")
-            else:
-                print("Image src attribute not found")
-        else:
-            print("Image tag with class 'chakra-image css-8938v5' not found")
-    else:
-        print("Button with class 'css-13wp03w' not found")
-
-    return None
-
-
-def debug_scrape_url(url):
-    """Debug a specific URL scraping process."""
+def debug_scrape_url(url: str) -> Dict[str, Any]:
+    """Debug a specific URL scraping process with optimizations."""
+    if not validate_url(url):
+        logger.error(f"Invalid URL provided: {url}")
+        return {'error': 'Invalid URL'}
+        
     print(f"\n=== DEBUG SCRAPING: {url} ===")
+    tracker = PerformanceTracker()
+    tracker.start('total_scraping')
+    
+    # Initialize counters
+    stats = {
+        'total_courts': 0,
+        'courts_with_complete_info': 0,
+        'courts_with_missing_info': 0,
+        'courts_with_image': 0,
+        'courts_without_image': 0,
+        'missing_info_courts': [],
+        'processed_courts': []
+    }
+    
+    # Initialize database with error handling
+    db = None
+    try:
+        config = load_config()
+        supabase_url = config.get("SUPABASE_URL")
+        supabase_key = config.get("SUPABASE_KEY")
+        
+        if supabase_url and supabase_key:
+            db = SupabaseDB(supabase_url, supabase_key)
+            print("✓ Database initialized")
+        else:
+            print("⚠ Database not configured - data won't be saved")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        print("✗ Database initialization failed")
 
-    scraper = PickleheadsScraper(headless=False)  # Visible for debugging
+    scraper = None
+    try:
+        scraper = PickleheadsScraper(headless=False)
+        print("✓ Scraper initialized")
+    except Exception as e:
+        logger.error(f"Scraper initialization failed: {e}")
+        return {'error': 'Scraper initialization failed'}
 
     try:
+        tracker.start('initial_navigation')
         print("1. Navigating to URL...")
         scraper.driver.get(url)
+        time.sleep(2)
+        tracker.end('initial_navigation')
 
-        print("2. Waiting for initial load...")
-        time.sleep(3)
+        print(f"2. Current URL: {scraper.driver.current_url}")
+        print(f"3. Page title: {scraper.driver.title or 'No title'}")
 
-        print(f"3. Current URL: {scraper.driver.current_url}")
-        print(f"4. Page title: {scraper.driver.title}")
-
-        print("5. Checking page source...")
+        tracker.start('page_analysis')
+        print("4. Analyzing page...")
         page_source = scraper.driver.page_source
-        print(f"   - Page source length: {len(page_source)}")
+        print(f"   - Page source length: {len(page_source):,} characters")
 
-        # Check for common indicators
+        # Optimized indicator checking
         source_lower = page_source.lower()
-        indicators = {
-            "Cloudflare": "cloudflare" in source_lower,
-            "Browser check": "checking your browser" in source_lower,
-            "403 Forbidden": "403 forbidden" in source_lower,
-            "Access denied": "access denied" in source_lower,
-            "CAPTCHA": "captcha" in source_lower,
-        }
-
-        print("6. Page indicators:")
-        for indicator, found in indicators.items():
+        indicators = [
+            ("Cloudflare", "cloudflare"),
+            ("Browser check", "checking your browser"),
+            ("403 Forbidden", "403 forbidden"),
+            ("Access denied", "access denied"),
+            ("CAPTCHA", "captcha")
+        ]
+        
+        print("5. Page indicators:")
+        for name, pattern in indicators:
+            found = pattern in source_lower
             status = "✓ FOUND" if found else "✗ Not found"
-            print(f"   - {indicator}: {status}")
+            print(f"   - {name}: {status}")
+        tracker.end('page_analysis')
 
-        print("\n7. Waiting for user input...")
+        print("\n6. Waiting for user input...")
         input("Press Enter to continue (check browser window)...")
 
-        # Try the full scraping method
-        print("8. Testing full scrape method...")
+        tracker.start('main_scraping')
+        print("7. Starting main scraping...")
         data = scraper.scrape_page_data(url)
 
         if data:
             print("✓ Scraping successful!")
             print(f"   - Title: {data['title']}")
             print(f"   - Final URL: {data['url']}")
-            print(f"   - Source length: {len(data['page_source'])}")
+            print(f"   - Source length: {len(data['page_source']):,} characters")
+            tracker.end('main_scraping')
 
-            # Extract and display chakra links
-            print("\n9. Extracting chakra links...")
-            chakra_links = extract_chakra_links(data["page_source"])
+            # Extract chakra links
+            tracker.start('link_extraction')
+            chakra_links = safe_extract(extract_chakra_links, data["page_source"], url) or []
+            tracker.end('link_extraction')
+            
             if chakra_links:
-                print(f"Found {len(chakra_links)} href links:")
-                for i, link in enumerate(chakra_links):
-                    print(f"   {i+1}. {link}")
-
-                # Scrape all href URLs
-                print("\n10. Scraping all href URLs...")
-                for i, link in enumerate(chakra_links):
-                    print(f"\nScraping URL {i+1}: {link}")
-                    try:
-                        link_data = scraper.scrape_page_data(link)
-                        if link_data:
-                            print(f"   ✓ Title: {link_data['title']}")
-                            print(f"   ✓ Final URL: {link_data['url']}")
-
-                            # Extract h1 heading
-                            h1_heading = extract_h1_heading(link_data["page_source"])
-                            if h1_heading:
-                                print(f"   ✓ H1 Heading: {h1_heading}")
-                            else:
-                                print("   ✗ H1 heading not found")
-
-                            # Extract anchor links
-                            print("   Extracting anchor links...")
-                            anchor_links = extract_anchor_links(
-                                link_data["page_source"]
-                            )
-                            if anchor_links:
-                                for j, anchor in enumerate(anchor_links):
-                                    anchor_href = anchor["href"]
-                                    anchor_text = anchor["text"]
-                                    print(f"   ✓ Anchor {j+1} - Href: {anchor_href}")
-                                    print(f"   ✓ Anchor {j+1} - Text: {anchor_text}")
-                            else:
-                                print("   ✗ No anchor links found")
-
-                            # Extract and download image
-                            print("   Extracting image...")
-                            image_data = extract_and_download_image(
-                                link_data["page_source"]
-                            )
-                            if image_data:
-                                print(f"   ✓ Image downloaded: {image_data['src']}")
-                                print(f"   ✓ Image type: {image_data['content_type']}")
-                                print(
-                                    f"   ✓ Image size: {len(image_data['image_data'])} bytes (base64)"
-                                )
-                            else:
-                                print("   ✗ No image found")
-
-                            # Create ScrapedCourtData object
-                            print("   Creating court data object...")
-                            court_data = ScrapedCourtData.from_scraped_data(
-                                h1_heading, anchor_links, image_data
-                            )
-                            print(f"   ✓ Court Data: {court_data}")
-                            print(f"   ✓ Court Name: {court_data.name}")
-                            print(f"   ✓ Court Address: {court_data.address}")
-                            print(f"   ✓ Court Phone: {court_data.telephone}")
-                            print(f"   ✓ Court Website: {court_data.websitetext}")
-                            if court_data.courtimage_path:
-                                print(f"   ✓ Image File: {court_data.courtimage_path}")
-                            if court_data.image_data:
-                                print(f"   ✓ Image Data Available: {len(court_data.image_data.get('image_data', ''))} bytes")
-                            print(f"   ✓ Dict Format: {court_data.to_dict()}")
-                            # Print object without image_data to avoid large output
-                            obj_dict = {k: v for k, v in court_data.__dict__.items() if k != 'image_data'}
-                            print(f"   ✓ Complete Object: {obj_dict}")
+                print(f"\n8. Found {len(chakra_links)} court links")
+                
+                # Process courts sequentially for debugging
+                tracker.start('court_processing')
+                for i, link in enumerate(chakra_links, 1):
+                    print(f"\nProcessing court {i}/{len(chakra_links)}: {link}")
+                    
+                    court_result = process_court_link(scraper, link, db)
+                    if court_result:
+                        court_data = court_result['court_data']
+                        stats['processed_courts'].append(court_result)
+                        
+                        # Update statistics using shared function
+                        update_court_statistics(stats, court_data)
+                        
+                        # Print results
+                        print(f"   ✓ Processed: {court_data.name or 'Unnamed Court'}")
+                        if court_result['saved_court']:
+                            print(f"   ✓ Saved to DB: {court_result['saved_court'].get('id')}")
                         else:
-                            print("   ✗ Failed to scrape")
-                    except Exception as e:
-                        print(f"   ✗ Error: {e}")
+                            print("   ⚠ Not saved to database")
+                    else:
+                        print(f"   ✗ Failed to process court {i}")
+                        
+                tracker.end('court_processing')
             else:
-                print("No chakra links found.")
+                print("\n8. No court links found")
         else:
-            print("✗ Scraping failed")
+            print("✗ Initial scraping failed")
+            tracker.end('main_scraping')
 
+    except KeyboardInterrupt:
+        print("\n⚠ Scraping interrupted by user")
+        logger.info("Scraping interrupted by user")
     except Exception as e:
-        print(f"ERROR: {e}")
-
+        logger.error(f"Unexpected error during scraping: {e}")
+        print(f"✗ Scraping failed: {e}")
     finally:
-        scraper.close()
+        if scraper:
+            try:
+                scraper.close()
+                print("✓ Scraper closed")
+            except Exception as e:
+                logger.error(f"Error closing scraper: {e}")
+        
+        tracker.end('total_scraping')
+        
+        # Print optimized summary
+        print_summary(stats, tracker)
+        
+        return {
+            'stats': stats,
+            'performance': tracker.get_summary(),
+            'success': stats['total_courts'] > 0
+        }
+
+
+def print_summary(stats: Dict[str, Any], tracker: PerformanceTracker):
+    """Print optimized summary with performance metrics."""
+    print(f"\n{'='*50}")
+    print("DEBUG SCRAPING SUMMARY")
+    print(f"{'='*50}")
+    
+    # Performance metrics
+    perf = tracker.get_summary()
+    print("Performance Metrics:")
+    for operation, duration in perf.items():
+        print(f"  {operation}: {duration:.2f}s")
+    
+    print(f"\nCourt Statistics:")
+    print(f"  Total courts processed: {stats['total_courts']}")
+    print(f"  Courts with complete info: {stats['courts_with_complete_info']}")
+    print(f"  Courts with missing info: {stats['courts_with_missing_info']}")
+    print(f"  Courts with image: {stats['courts_with_image']}")
+    print(f"  Courts without image: {stats['courts_without_image']}")
+    
+    # Missing info details
+    if stats['missing_info_courts']:
+        print(f"\n--- COURTS WITH MISSING INFO ---")
+        for i, court in enumerate(stats['missing_info_courts'], 1):
+            print(f"{i}. Name: {court['name']}")
+            print(f"   Address: {court['address']}")
+            print(f"   Missing fields: {', '.join(court['missing_fields'])}")
+    
+    print(f"{'='*50}")
 
 
 if __name__ == "__main__":
-    # Test with a sample pickleheads URL
-    test_url = "https://www.pickleheads.com/search?q=Irvine+CA+USA&lat=33.6846&lng=-117.8265&z=10.0"
-    debug_scrape_url(test_url)
+    # Test URLs list
+    #"https://www.pickleheads.com/search?q=Irvine+CA+USA&lat=33.6846&lng=-117.8265&z=10.0",
+    #"https://www.pickleheads.com/search?q=Monrovia%2C+California%2C+United+States&lat=34.1470&lng=-118.0010&z=10.0",
+    test_urls = [
+        "https://www.pickleheads.com/search?q=111+East+Dewey+Avenue%2C+Wharton%2C+New+Jersey+07885%2C+US&lat=40.9078&lng=-74.5733&z=10.0"
+    ]
+    
+    total_results = []
+    url_timings = []
+    
+    for i, test_url in enumerate(test_urls, 1):
+        url_start_time = time.time()
+        try:
+            print(f"\n{'='*60}")
+            print(f"PROCESSING URL {i}/{len(test_urls)}")
+            print(f"{'='*60}")
+            
+            result = debug_scrape_url(test_url)
+            url_duration = time.time() - url_start_time
+            result['url_processing_time'] = url_duration
+            total_results.append(result)
+            url_timings.append(url_duration)
+            
+            print(f"\n⏱️ URL {i} processing time: {url_duration:.2f} seconds")
+            
+            if not result.get('success', False):
+                logger.warning(f"No courts found for URL {i}")
+                
+        except Exception as e:
+            url_duration = time.time() - url_start_time
+            logger.error(f"Failed to process URL {i}: {e}")
+            total_results.append({'error': str(e), 'success': False, 'url_processing_time': url_duration})
+            url_timings.append(url_duration)
+            print(f"\n⏱️ URL {i} processing time (failed): {url_duration:.2f} seconds")
+    
+    # Final summary
+    successful_runs = sum(1 for r in total_results if r.get('success', False))
+    total_courts = sum(r.get('stats', {}).get('total_courts', 0) for r in total_results)
+    total_time = sum(url_timings)
+    avg_time = total_time / len(url_timings) if url_timings else 0
+    
+    print(f"\n{'='*60}")
+    print("FINAL EXECUTION SUMMARY")
+    print(f"{'='*60}")
+    print(f"URLs processed: {len(test_urls)}")
+    print(f"Successful runs: {successful_runs}")
+    print(f"Total courts found: {total_courts}")
+    print(f"\nTiming Summary:")
+    print(f"Total processing time: {total_time:.2f} seconds")
+    print(f"Average time per URL: {avg_time:.2f} seconds")
+    for i, timing in enumerate(url_timings, 1):
+        print(f"  URL {i}: {timing:.2f}s")
+    print(f"{'='*60}")

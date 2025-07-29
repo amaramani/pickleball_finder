@@ -64,6 +64,60 @@ class PickleheadsScraper:
         
         return False
 
+    def _handle_cookie_consent(self):
+        """Automatically handle cookie consent dialogs."""
+        try:
+            # Common cookie consent button selectors
+            consent_selectors = [
+                "button[id*='accept']",
+                "button[class*='accept']",
+                "button[id*='consent']",
+                "button[class*='consent']",
+                "button[id*='cookie']",
+                "button[class*='cookie']",
+                "button:contains('Accept')",
+                "button:contains('OK')",
+                "button:contains('I Accept')",
+                "button:contains('Allow')",
+                "[data-testid*='accept']",
+                "[data-cy*='accept']"
+            ]
+            
+            for selector in consent_selectors:
+                try:
+                    if selector.startswith("button:contains"):
+                        # Handle text-based selectors with JavaScript
+                        text = selector.split("'")[1]
+                        element = self.driver.execute_script(f"""
+                            var buttons = document.querySelectorAll('button');
+                            for (var i = 0; i < buttons.length; i++) {{
+                                if (buttons[i].textContent.toLowerCase().includes('{text.lower()}')) {{
+                                    return buttons[i];
+                                }}
+                            }}
+                            return null;
+                        """)
+                        if element:
+                            element.click()
+                            print("  ✓ Cookie consent accepted")
+                            time.sleep(1)
+                            return
+                    else:
+                        # Handle CSS selectors
+                        element = WebDriverWait(self.driver, 2).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
+                        element.click()
+                        print("  ✓ Cookie consent accepted")
+                        time.sleep(1)
+                        return
+                except:
+                    continue
+                    
+        except Exception:
+            # No cookie dialog found or error occurred - continue silently
+            pass
+
     def scrape_page_data(self, url: str) -> dict | None:
         """Scrape complete page data including title and source."""
         if not self.driver:
@@ -86,6 +140,9 @@ class PickleheadsScraper:
             if not self._wait_for_page_load():
                 print(f"  Page load timeout for {url}")
                 return None
+            
+            # Handle cookie consent automatically
+            self._handle_cookie_consent()
             
             # Additional wait for dynamic content
             time.sleep(random.uniform(1, 3))

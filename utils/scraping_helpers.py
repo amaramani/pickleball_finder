@@ -8,6 +8,9 @@ from utils.performance_helpers import retry_on_failure, safe_extract, validate_u
 @retry_on_failure(max_retries=2, delay=1.0)
 def process_court_link(scraper, link: str, db) -> Optional[Dict[str, Any]]:
     """Process individual court link with error handling and retries."""
+    import time
+    start_time = time.time()
+    
     try:
         if not validate_url(link):
             logger.warning(f"Invalid URL: {link}")
@@ -31,10 +34,12 @@ def process_court_link(scraper, link: str, db) -> Optional[Dict[str, Any]]:
                     break
             
             if address and db.address_exists(address):
+                processing_time = time.time() - start_time
                 return {
                     'duplicate': True,
                     'address': address,
-                    'url': link
+                    'url': link,
+                    'processing_time': processing_time
                 }
         
         # Only extract image if not duplicate
@@ -52,6 +57,7 @@ def process_court_link(scraper, link: str, db) -> Optional[Dict[str, Any]]:
             except Exception as e:
                 logger.error(f"Database save failed: {e}")
         
+        processing_time = time.time() - start_time
         return {
             'link_data': link_data,
             'court_data': court_data,
@@ -62,7 +68,8 @@ def process_court_link(scraper, link: str, db) -> Optional[Dict[str, Any]]:
             'url': link,
             'title': link_data['title'],
             'final_url': link_data['url'],
-            'page_source': link_data['page_source']
+            'page_source': link_data['page_source'],
+            'processing_time': processing_time
         }
     except Exception as e:
         logger.error(f"Error processing court link {link}: {e}")

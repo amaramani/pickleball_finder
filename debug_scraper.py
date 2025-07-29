@@ -114,8 +114,9 @@ def debug_scrape_url(url: str) -> Dict[str, Any]:
                     
                     court_result = process_court_link(scraper, link, db)
                     if court_result:
+                        processing_time = court_result.get('processing_time', 0)
                         if court_result.get('duplicate'):
-                            print(f"   ⚠ Skipping duplicate address: {court_result['address']}")
+                            print(f"   ⚠ Skipping duplicate address: {court_result['address']} ({processing_time:.1f}s)")
                         else:
                             court_data = court_result['court_data']
                             stats['processed_courts'].append(court_result)
@@ -124,7 +125,7 @@ def debug_scrape_url(url: str) -> Dict[str, Any]:
                             update_court_statistics(stats, court_data)
                             
                             # Print results
-                            print(f"   ✓ Processed: {court_data.name or 'Unnamed Court'}")
+                            print(f"   ✓ Processed: {court_data.name or 'Unnamed Court'} ({processing_time:.1f}s)")
                             if court_result['saved_court']:
                                 print(f"   ✓ Saved to DB: {court_result['saved_court'].get('id')}")
                             else:

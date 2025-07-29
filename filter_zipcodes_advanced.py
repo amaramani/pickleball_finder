@@ -55,8 +55,12 @@ class ZipcodeFilter:
             )
             
             if places_data:
-                courts = self.data_processor.process_places_data(places_data)
-                return len(courts) > 0, len(courts)
+                if self.data_processor.has_any_courts(places_data):
+                    # Only process full data if we need the count
+                    courts = self.data_processor.process_places_data(places_data)
+                    return True, len(courts)
+                else:
+                    return False, 0
             
             return False, 0
             
@@ -136,7 +140,7 @@ class ZipcodeFilter:
         print(f"Average time per zipcode: {total_time/len(all_zipcodes):.1f} seconds")
         print(f"Total zip codes processed: {len(all_zipcodes)}")
         print(f"Zip codes with courts: {len(valid_zipcodes)} ({len(valid_zipcodes)/len(all_zipcodes)*100:.1f}%)")
-        print(f"Total courts found: {total_courts_found}")
+        print(f"Total court places found: {total_courts_found}")
         print(f"Average courts per valid zipcode: {total_courts_found/len(valid_zipcodes):.1f}" if valid_zipcodes else "")
         print(f"Results saved to: {output_file}")
 

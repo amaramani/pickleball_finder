@@ -20,6 +20,24 @@ def process_court_link(scraper, link: str, db) -> Optional[Dict[str, Any]]:
         # Extract data with safe extraction
         h1_heading = safe_extract(extract_h1_heading, link_data["page_source"])
         anchor_links = safe_extract(extract_anchor_links, link_data["page_source"]) or []
+        
+        # Check for duplicate address before processing image (expensive operation)
+        if anchor_links and db:
+            # Get address from anchor links (usually first one is address)
+            address = None
+            for anchor in anchor_links:
+                if 'address' in anchor.get('text', '').lower() or len(anchor.get('text', '')) > 10:
+                    address = anchor.get('text', '').strip()
+                    break
+            
+            if address and db.address_exists(address):
+                return {
+                    'duplicate': True,
+                    'address': address,
+                    'url': link
+                }
+        
+        # Only extract image if not duplicate
         image_data = safe_extract(extract_and_download_image, link_data["page_source"])
         
         # Create court data object

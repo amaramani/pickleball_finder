@@ -19,6 +19,15 @@ class SupabaseDB:
             print(f"Error saving to database: {e}")
             return None
     
+    def address_exists(self, address: str) -> bool:
+        """Check if address already exists in database."""
+        try:
+            result = self.client.table('pickleball_courts').select('id').eq('address', address).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            print(f"Error checking address: {e}")
+            return False
+    
     def get_all_courts(self) -> list:
         """Get all courts from database."""
         try:

@@ -114,18 +114,21 @@ def debug_scrape_url(url: str) -> Dict[str, Any]:
                     
                     court_result = process_court_link(scraper, link, db)
                     if court_result:
-                        court_data = court_result['court_data']
-                        stats['processed_courts'].append(court_result)
-                        
-                        # Update statistics using shared function
-                        update_court_statistics(stats, court_data)
-                        
-                        # Print results
-                        print(f"   ✓ Processed: {court_data.name or 'Unnamed Court'}")
-                        if court_result['saved_court']:
-                            print(f"   ✓ Saved to DB: {court_result['saved_court'].get('id')}")
+                        if court_result.get('duplicate'):
+                            print(f"   ⚠ Skipping duplicate address: {court_result['address']}")
                         else:
-                            print("   ⚠ Not saved to database")
+                            court_data = court_result['court_data']
+                            stats['processed_courts'].append(court_result)
+                            
+                            # Update statistics using shared function
+                            update_court_statistics(stats, court_data)
+                            
+                            # Print results
+                            print(f"   ✓ Processed: {court_data.name or 'Unnamed Court'}")
+                            if court_result['saved_court']:
+                                print(f"   ✓ Saved to DB: {court_result['saved_court'].get('id')}")
+                            else:
+                                print("   ⚠ Not saved to database")
                     else:
                         print(f"   ✗ Failed to process court {i}")
                         
@@ -193,56 +196,108 @@ def print_summary(stats: Dict[str, Any], tracker: PerformanceTracker):
 
 
 if __name__ == "__main__":
-    # Test URLs list
-    #"https://www.pickleheads.com/search?q=Irvine+CA+USA&lat=33.6846&lng=-117.8265&z=10.0",
-    #"https://www.pickleheads.com/search?q=Monrovia%2C+California%2C+United+States&lat=34.1470&lng=-118.0010&z=10.0",
-    test_urls = [
-        "https://www.pickleheads.com/search?q=111+East+Dewey+Avenue%2C+Wharton%2C+New+Jersey+07885%2C+US&lat=40.9078&lng=-74.5733&z=10.0"
-    ]
+    # Test zip codes for debugging
+    #test_zipcodes = ["30044", "92604", "10001"]
+    #test_zipcodes = ["70055"] #no places
+    #test_zipcodes = ["95419"] #2 places
+    test_zipcodes = ["30044"] #1 place
+    
+    from core.google_places_api import GooglePlacesAPI
+    from core.data_processor import DataProcessor
+    from utils.url_formatter import PickleheadsURLFormatter
+    from utils.config import load_config
+    
+    # Initialize APIs
+    config = load_config()
+    google_api_key = config.get("Maps_API_KEY")
+    if not google_api_key:
+        print("Error: Maps_API_KEY not found in .env file.")
+        exit(1)
+    
+    google_api = GooglePlacesAPI(google_api_key)
+    data_processor = DataProcessor()
+    url_formatter = PickleheadsURLFormatter(google_api_key)
     
     total_results = []
-    url_timings = []
+    zipcode_timings = []
     
-    for i, test_url in enumerate(test_urls, 1):
-        url_start_time = time.time()
+    for i, zip_code in enumerate(test_zipcodes, 1):
+        zipcode_start_time = time.time()
         try:
             print(f"\n{'='*60}")
-            print(f"PROCESSING URL {i}/{len(test_urls)}")
+            print(f"PROCESSING ZIPCODE {i}/{len(test_zipcodes)}: {zip_code}")
             print(f"{'='*60}")
             
-            result = debug_scrape_url(test_url)
-            url_duration = time.time() - url_start_time
-            result['url_processing_time'] = url_duration
-            total_results.append(result)
-            url_timings.append(url_duration)
+            # Get coordinates for zip code
+            geocode_result = google_api.geocode_zip_code(zip_code)
+            if not geocode_result:
+                print(f"Could not find coordinates for zip code: {zip_code}")
+                continue
             
-            print(f"\n⏱️ URL {i} processing time: {url_duration:.2f} seconds")
+            # Search for courts
+            places_data = google_api.search_pickleball_courts(
+                geocode_result["lat"], geocode_result["lng"]
+            )
             
-            if not result.get('success', False):
-                logger.warning(f"No courts found for URL {i}")
+            if places_data and data_processor.has_any_courts(places_data):
+                pickleballplaces = data_processor.process_places_data(places_data)
+                print(f"Found {len(pickleballplaces)} Pickleball Places in {zip_code}")
+                
+                # Generate URL for first court
+                first_court = pickleballplaces[0]
+                reverse_geocode_info = google_api.reverse_geocode_coordinates(
+                    first_court["latitude"], first_court["longitude"]
+                )
+                city = reverse_geocode_info.get("city", "")
+                state = reverse_geocode_info.get("state", "")
+                country = reverse_geocode_info.get("country", "")
+                
+                test_url = url_formatter.generate_pickleheads_url(
+                    city, state, country, first_court["latitude"], first_court["longitude"]
+                )
+                
+                print(f"Generated Scraping URL: {test_url}")
+                
+                # Debug scrape the URL
+                result = debug_scrape_url(test_url)
+                zipcode_duration = time.time() - zipcode_start_time
+                result['zipcode_processing_time'] = zipcode_duration
+                result['zipcode'] = zip_code
+                total_results.append(result)
+                zipcode_timings.append(zipcode_duration)
+                
+                print(f"\n⏱️ Zipcode {zip_code} processing time: {zipcode_duration:.2f} seconds")
+                
+                if not result.get('success', False):
+                    logger.warning(f"No courts processed for zipcode {zip_code}")
+            else:
+                print(f"No courts found in zipcode {zip_code}")
+                zipcode_duration = time.time() - zipcode_start_time
+                zipcode_timings.append(zipcode_duration)
                 
         except Exception as e:
-            url_duration = time.time() - url_start_time
-            logger.error(f"Failed to process URL {i}: {e}")
-            total_results.append({'error': str(e), 'success': False, 'url_processing_time': url_duration})
-            url_timings.append(url_duration)
-            print(f"\n⏱️ URL {i} processing time (failed): {url_duration:.2f} seconds")
+            zipcode_duration = time.time() - zipcode_start_time
+            logger.error(f"Failed to process zipcode {zip_code}: {e}")
+            total_results.append({'error': str(e), 'success': False, 'zipcode_processing_time': zipcode_duration, 'zipcode': zip_code})
+            zipcode_timings.append(zipcode_duration)
+            print(f"\n⏱️ Zipcode {zip_code} processing time (failed): {zipcode_duration:.2f} seconds")
     
     # Final summary
     successful_runs = sum(1 for r in total_results if r.get('success', False))
     total_courts = sum(r.get('stats', {}).get('total_courts', 0) for r in total_results)
-    total_time = sum(url_timings)
-    avg_time = total_time / len(url_timings) if url_timings else 0
+    total_time = sum(zipcode_timings)
+    avg_time = total_time / len(zipcode_timings) if zipcode_timings else 0
     
     print(f"\n{'='*60}")
     print("FINAL EXECUTION SUMMARY")
     print(f"{'='*60}")
-    print(f"URLs processed: {len(test_urls)}")
+    print(f"Zipcodes processed: {len(test_zipcodes)}")
     print(f"Successful runs: {successful_runs}")
     print(f"Total courts found: {total_courts}")
     print(f"\nTiming Summary:")
     print(f"Total processing time: {total_time:.2f} seconds")
-    print(f"Average time per URL: {avg_time:.2f} seconds")
-    for i, timing in enumerate(url_timings, 1):
-        print(f"  URL {i}: {timing:.2f}s")
+    print(f"Average time per zipcode: {avg_time:.2f} seconds")
+    for i, timing in enumerate(zipcode_timings, 1):
+        zipcode = test_zipcodes[i-1] if i <= len(test_zipcodes) else f"Zipcode {i}"
+        print(f"  {zipcode}: {timing:.2f}s")
     print(f"{'='*60}")

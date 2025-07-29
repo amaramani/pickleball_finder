@@ -35,3 +35,16 @@ class DataProcessor:
                     }
                 )
         return courts
+    
+    def has_any_courts(self, places_data: list) -> bool:
+        """Check if places data contains at least one valid pickleball court (optimized for filtering)."""
+        for place in places_data:
+            name = place.get("name")
+            address = place.get("vicinity") or place.get("formatted_address")
+            geometry = place.get("geometry", {}).get("location", {})
+            latitude = geometry.get("lat")
+            longitude = geometry.get("lng")
+
+            if all([name, address, latitude, longitude]):
+                return True  # Found at least one valid court, return immediately
+        return False

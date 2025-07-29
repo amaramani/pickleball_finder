@@ -233,18 +233,21 @@ def main():
                                     court_result = process_court_link(pickleheads_scraper, link, db)
                                     
                                     if court_result:
-                                        court_data = court_result['court_data']
-                                        
-                                        # Update statistics
-                                        stats.add_court(zip_code, court_data)
-                                        
-                                        place["scraped_hrefs"].append(court_result)
-                                        
-                                        print(f"    ✓ Processed: {court_data.name or 'Unnamed Court'}")
-                                        if court_result['saved_court']:
-                                            print(f"    ✓ Saved to DB: {court_result['saved_court'].get('id')}")
+                                        if court_result.get('duplicate'):
+                                            print(f"    ⚠ Skipping duplicate address: {court_result['address']}")
                                         else:
-                                            print("    ⚠ Not saved to database")
+                                            court_data = court_result['court_data']
+                                            
+                                            # Update statistics
+                                            stats.add_court(zip_code, court_data)
+                                            
+                                            place["scraped_hrefs"].append(court_result)
+                                            
+                                            print(f"    ✓ Processed: {court_data.name or 'Unnamed Court'}")
+                                            if court_result['saved_court']:
+                                                print(f"    ✓ Saved to DB: {court_result['saved_court'].get('id')}")
+                                            else:
+                                                print("    ⚠ Not saved to database")
                                     else:
                                         print(f"    ✗ Failed to process court {i}")
                             else:

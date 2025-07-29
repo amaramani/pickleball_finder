@@ -54,8 +54,9 @@ def filter_zipcodes_with_courts(input_file: str, output_file: str):
             )
             
             if places_data:
-                courts = data_processor.process_places_data(places_data)
-                if courts:
+                if data_processor.has_any_courts(places_data):
+                    # Only process full data if we need the count
+                    courts = data_processor.process_places_data(places_data)
                     valid_zipcodes.append(zip_code)
                     total_courts_found += len(courts)
                     zipcode_time = time.time() - zipcode_start

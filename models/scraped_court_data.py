@@ -37,22 +37,47 @@ class ScrapedCourtData:
     @staticmethod
     def save_to_csv(courts: list, filename: str = 'pickleball_courts.csv'):
         """Save list of courts to CSV file."""
-        # Ensure data directory exists
-        os.makedirs('data', exist_ok=True)
-        filepath = os.path.join('data', filename)
-        
-        # Write CSV file
-        with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
+        try:
+            os.makedirs('data', exist_ok=True)
+            filepath = os.path.join('data', filename)
             
-            # Write header
-            writer.writerow(['Name', 'Address', 'Courtlink'])
+            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['Name', 'Address', 'Courtlink'])
+                
+                for court in courts:
+                    writer.writerow(court.to_csv_row())
             
-            # Write court data
-            for court in courts:
-                writer.writerow(court.to_csv_row())
-        
-        print(f"✓ Saved {len(courts)} courts to {filepath}")
+            print(f"✓ Saved {len(courts)} courts to {filepath}")
+        except (OSError, IOError, PermissionError) as e:
+            print(f"❌ Error saving CSV file: {e}")
+            raise
+    
+    @staticmethod
+    def append_to_csv(courts: list, filename: str = 'pickleball_courts.csv'):
+        """Append courts to existing CSV file."""
+        if not courts:
+            return
+            
+        try:
+            os.makedirs('data', exist_ok=True)
+            filepath = os.path.join('data', filename)
+            
+            file_exists = os.path.exists(filepath)
+            
+            with open(filepath, 'a', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                if not file_exists:
+                    writer.writerow(['Name', 'Address', 'Courtlink'])
+                
+                for court in courts:
+                    writer.writerow(court.to_csv_row())
+            
+            print(f"✓ Appended {len(courts)} courts to {filepath}")
+        except (OSError, IOError, PermissionError) as e:
+            print(f"❌ Error appending to CSV file: {e}")
+            raise
     
     def __str__(self) -> str:
         return f"Court(name='{self.name}', address='{self.address}')"

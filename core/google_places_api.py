@@ -90,7 +90,7 @@ class GooglePlacesAPI:
             return {"city": "", "state": "", "country": ""}
 
     def search_pickleball_courts(
-        self, latitude: float, longitude: float, radius: int = 5000
+        self, latitude: float, longitude: float, radius: int = 4000
     ) -> list | None:
         """
         Searches for pickleball courts near a given latitude and longitude using the Places API.
